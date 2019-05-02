@@ -380,9 +380,9 @@ func (e *ENIIPPool) hasPods() bool {
 }
 
 // GetENINeedsIP finds an ENI in the datastore that needs more IP addresses allocated
-func (ds *DataStore) GetENINeedsIP(maxIPperENI int64, skipPrimary bool) *ENIIPPool {
+func (ds *DataStore) GetENINeedsIP(maxIPperENI int64, customNetworkEnabled bool) *ENIIPPool {
 	for _, eni := range ds.eniIPPools {
-		if skipPrimary && eni.IsPrimary {
+		if customNetworkEnabled && eni.IsPrimary {
 			log.Debugf("Skip the primary ENI for need IP check")
 			continue
 		}

@@ -631,7 +631,7 @@ func (c *IPAMContext) tryAssignIPs() (increasedPool bool, err error) {
 
 	eni := c.dataStore.GetENINeedsIP(maxIPPerENI, UseCustomNetworkCfg())
 
-	if int64(len(eni.IPv4Addresses)) < maxIPPerENI {
+	if eni != nil && int64(len(eni.IPv4Addresses)) < maxIPPerENI {
 		log.Debugf("Found ENI %s that has less than the maximum number of IP addresses allocated: cur=%d, max=%d", eni.ID, len(eni.IPv4Addresses), maxIPPerENI)
 
 		err = c.awsClient.AllocIPAddresses(eni.ID, maxIPPerENI-int64(len(eni.IPv4Addresses)))
@@ -648,6 +648,8 @@ func (c *IPAMContext) tryAssignIPs() (increasedPool bool, err error) {
 		c.addENIaddressesToDataStore(ec2Addrs, eni.ID)
 		return true, nil
 	}
+
+
 	return false, nil
 }
 
