@@ -19,6 +19,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	log "github.com/cihub/seelog"
@@ -50,6 +51,10 @@ const (
 	decreaseIPPoolInterval      = 30 * time.Second
 	maxK8SRetries               = 12
 	retryK8SInterval            = 5 * time.Second
+
+	// ipReconcileCooldown is the amount of time that an IP address must wait until it can be added to the data store
+	// during reconciliation after being discovered on the EC2 instance metadata.
+	ipReconcileCooldown = 60 * time.Second
 
 	// This environment variable is used to specify the desired number of free IPs always available in the "warm pool".
 	// When it is not set, ipamd defaults to use all available IPs per ENI for that instance type.
@@ -160,6 +165,36 @@ type IPAMContext struct {
 	primaryIP            map[string]string
 	lastNodeIPPoolAction time.Time
 	lastDecreaseIPPool   time.Time
+
+	// reconcileCooldownCache keeps timestamps of the last time an IP address was unassigned from an ENI,
+	// so that we don't reconcile and add it back too quickly if IMDS lags behind reality.
+	reconcileCooldownCache ReconcileCooldownCache
+}
+
+type ReconcileCooldownCache struct {
+	cache map[string]time.Time
+	lock       sync.RWMutex
+}
+
+func (r *ReconcileCooldownCache) Add(ips []string) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	expiry := time.Now().Add(ipReconcileCooldown)
+
+	for _, ip := range ips {
+		r.cache[ip] = expiry
+	}
+}
+
+func (r *ReconcileCooldownCache) RecentlyFreed(ip string) bool {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	now := time.Now()
+	if expiry, ok := r.cache[ip]; ok {
+		return now.Sub(expiry) < 0
+	}
+	return false
 }
 
 func prometheusRegister() {
@@ -436,8 +471,13 @@ func (c *IPAMContext) tryUnassignIPsFromAll() {
 					continue
 				} else {
 					deletedIPs = append(deletedIPs, toDelete)
+
 				}
 			}
+
+			// Track the last time we unassigned IPs from an ENI.  We won't reconcile any IPs in this cache
+			// for at least ipReconcileCooldown
+			c.reconcileCooldownCache.Add(deletedIPs)
 
 			// Deallocate IPs from the instance if they aren't used by pods.
 			if err := c.awsClient.DeallocIPAddresses(eniID, deletedIPs); err != nil {
@@ -931,6 +971,11 @@ func (c *IPAMContext) eniIPPoolReconcile(ipPool map[string]*datastore.AddressInf
 	for _, localIP := range attachedENI.LocalIPv4s {
 		if localIP == c.primaryIP[eni] {
 			log.Debugf("Reconcile and skip primary IP %s on ENI %s", localIP, eni)
+			continue
+		}
+
+		if c.reconcileCooldownCache.RecentlyFreed(localIP) {
+			log.Debugf("Reconcile skipping IP %s on ENI %s because it was unassigned from the ENI recently.", localIP, eni)
 			continue
 		}
 
