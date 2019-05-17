@@ -395,12 +395,18 @@ func (c *IPAMContext) getLocalPodsWithRetry() ([]*k8sapi.K8SPodInfo, error) {
 	// TODO consider using map
 	for _, pod := range pods {
 		// needs to find the container ID
+		log.Debugf("Checking for pod (Name=%s, UID=%s, Container=%s, IP=%s, Namespace=%s", pod.Name, pod.UID, pod.Container, pod.IP, pod.Namespace)
+		found := false
 		for _, container := range containers {
 			if container.K8SUID == pod.UID {
-				log.Debugf("Found pod(%v)'s container ID: %v ", container.Name, container.ID)
+				found = true
+				log.Debugf("Found container %s %s", container.Name, container.ID)
 				pod.Container = container.ID
 				break
 			}
+		}
+		if !found {
+			log.Debugf("Did not find container for pod (Name=%s, UID=%s, Container=%s, IP=%s, Namespace=%s", pod.Name, pod.UID, pod.Container, pod.IP, pod.Namespace)
 		}
 	}
 	return pods, nil
